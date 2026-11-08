@@ -40,7 +40,7 @@ function uploadNames(init: RequestInit | undefined): string[] {
 }
 
 describe("screening batches", () => {
-  it("uploads at most five files sequentially and reports progress per batch", async () => {
+  it("analyzes at most five files per request and reports progress per completed batch", async () => {
     vi.stubEnv("VITE_USE_MOCK", "false");
     vi.stubEnv("VITE_API_URL", "https://screening.example.test");
     const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
@@ -78,11 +78,61 @@ describe("screening batches", () => {
       files.slice(5, 10).map((file) => file.name),
       files.slice(10).map((file) => file.name),
     ]);
-    expect(progress).toEqual([5, 10, 12]);
+    expect(progress).toHaveLength(3);
+    expect(progress[progress.length - 1]).toBe(12);
+    expect(progress).toEqual([...progress].sort((a, b) => a - b));
     expect(result.current.candidates).toHaveLength(12);
     expect(
       result.current.candidates.find((candidate) => candidate.resumeId === "resume-7")?.name,
     ).toBe("resume-7.pdf");
+  });
+
+  it("runs at most two five-file analysis requests concurrently", async () => {
+    vi.stubEnv("VITE_USE_MOCK", "false");
+    vi.stubEnv("VITE_API_URL", "https://screening.example.test");
+    const resolveRequests: Array<() => void> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const names = uploadNames(init);
+      return new Promise<Response>((resolve) => {
+        resolveRequests.push(() =>
+          resolve(new Response(JSON.stringify({ results: names.map((name) => analysis(name)) }))),
+        );
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useScreening(), { wrapper });
+    const files = Array.from({ length: 12 }, (_, index) => ({
+      id: `resume-${index}`,
+      name: `resume-${index}.pdf`,
+      size: 10,
+      file: new File(["pdf"], `resume-${index}.pdf`, { type: "application/pdf" }),
+    }));
+    act(() => {
+      result.current.setJD("A sufficiently long job description for testing.");
+      result.current.setFiles(files);
+    });
+
+    await act(async () => {
+      const screening = result.current.runScreening(() => undefined);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      expect(resolveRequests).toHaveLength(2);
+
+      resolveRequests[0]!();
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      expect(resolveRequests).toHaveLength(3);
+
+      resolveRequests[1]!();
+      resolveRequests[2]!();
+      await screening;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map(([, init]) => uploadNames(init))).toEqual([
+      files.slice(0, 5).map((file) => file.name),
+      files.slice(5, 10).map((file) => file.name),
+      files.slice(10).map((file) => file.name),
+    ]);
   });
 
   it("keeps successful batches and creates error candidates for failed batches", async () => {
