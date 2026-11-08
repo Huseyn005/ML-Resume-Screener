@@ -369,6 +369,7 @@ def test_default_allowed_origins_are_original(
         "https://pullcv.vercel.app",
         "https://taphire.vercel.app",
         "https://dragcv.vercel.app",
+        "https://shortlists.vercel.app",
         "http://localhost:5173",
         "http://localhost:8080",
     ]

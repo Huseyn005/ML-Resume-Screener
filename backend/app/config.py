@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     allowed_origins: str = (
         "https://pushcv.vercel.app, https://statcv.vercel.app, "
         "https://pullcv.vercel.app, https://taphire.vercel.app, "
-        "https://dragcv.vercel.app,http://localhost:5173,http://localhost:8080"
+        "https://dragcv.vercel.app,https://shortlists.vercel.app,"
+        "http://localhost:5173,http://localhost:8080"
     )
     allowed_origin_regex: str = ""
     log_level: str = "INFO"

@@ -27,6 +27,7 @@ python -m pip install -r requirements.txt
 By default, `ALLOWED_ORIGINS` includes `https://pushcv.vercel.app`,
 `https://statcv.vercel.app`, `https://pullcv.vercel.app`,
 `https://taphire.vercel.app`, `https://dragcv.vercel.app`,
+`https://shortlists.vercel.app`,
 `http://localhost:5173`, and `http://localhost:8080`. Override it with a
 comma-separated list of allowed browser origins for your deployment.
 `ALLOWED_ORIGIN_REGEX` defaults to empty and can allow Vercel previews, for
@@ -34,7 +35,8 @@ example `^https://pushcv(-[a-z0-9-]+)*\.vercel\.app$`.
 `EMBED_MODEL` defaults to `sentence-transformers/all-MiniLM-L6-v2`; the model
 is baked into the Docker image at build time and used offline at runtime.
 Fine-tuned models are trained locally, uploaded with `calibrator.pkl` to a
-private Hugging Face model repo, and downloaded when the Space starts.
+private Hugging Face model repo, and downloaded when the backend starts if
+`FINETUNED_REPO` is configured.
 Training never runs on the server. Do not override `EMBED_MODEL` on the host.
 Resource and rate-limit defaults are documented in
 [docs/deployment.md](../docs/deployment.md).
