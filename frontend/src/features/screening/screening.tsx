@@ -259,63 +259,79 @@ export function ScreeningProvider({ children }: { children: ReactNode }) {
       }
     } else {
       const failures: string[] = [];
-      for (let start = 0; start < files.length; start += UPLOAD_BATCH_SIZE) {
-        const batchFiles = files.slice(start, start + UPLOAD_BATCH_SIZE);
-        try {
-          const uploads = await Promise.all(
-            batchFiles.map(async (f) => {
-              if (f.file) {
-                await putResume(f.id, f.file);
-                return f.file;
+      const batches = Array.from(
+        { length: Math.ceil(files.length / UPLOAD_BATCH_SIZE) },
+        (_, index) => files.slice(index * UPLOAD_BATCH_SIZE, (index + 1) * UPLOAD_BATCH_SIZE),
+      );
+      const batchResults: Candidate[][] = Array.from({ length: batches.length }, () => []);
+      let nextBatchIndex = 0;
+      let completed = 0;
+
+      await Promise.all(
+        Array.from({ length: Math.min(2, batches.length) }, async () => {
+          while (nextBatchIndex < batches.length) {
+            const batchIndex = nextBatchIndex++;
+            const batchFiles = batches[batchIndex]!;
+            try {
+              const uploads = await Promise.all(
+                batchFiles.map(async (f) => {
+                  if (f.file) {
+                    await putResume(f.id, f.file);
+                    return f.file;
+                  }
+                  const blob = await getResume(f.id);
+                  if (!blob) {
+                    throw new Error(`Resume file "${f.name}" is no longer available.`);
+                  }
+                  return new File([blob], f.name, { type: blob.type || "application/pdf" });
+                }),
+              );
+              const payload = await analyzeResumes(jd, uploads);
+              const analyses = getAnalysisResults(payload);
+              if (analyses.length !== batchFiles.length) {
+                throw new Error(
+                  `The backend returned ${analyses.length} results for ${batchFiles.length} resumes.`,
+                );
               }
-              const blob = await getResume(f.id);
-              if (!blob) {
-                throw new Error(`Resume file "${f.name}" is no longer available.`);
-              }
-              return new File([blob], f.name, { type: blob.type || "application/pdf" });
-            }),
-          );
-          const payload = await analyzeResumes(jd, uploads);
-          const analyses = getAnalysisResults(payload);
-          if (analyses.length !== batchFiles.length) {
-            throw new Error(
-              `The backend returned ${analyses.length} results for ${batchFiles.length} resumes.`,
-            );
+              analyses.forEach((analysis, index) => {
+                const fileIndex = batchFiles.findIndex((f) => f.name === analysis.filename);
+                const file = batchFiles[fileIndex >= 0 ? fileIndex : index]!;
+                batchResults[batchIndex]!.push(
+                  mapAnalysis(
+                    analysis,
+                    file.id,
+                    prev.find((c) => c.resumeId === file.id)?.id ?? file.id,
+                  ),
+                );
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : "Unknown analysis error";
+              failures.push(message);
+              batchFiles.forEach((file) => {
+                batchResults[batchIndex]!.push({
+                  id: prev.find((c) => c.resumeId === file.id)?.id ?? file.id,
+                  resumeId: file.id,
+                  name: file.name,
+                  role: "",
+                  score: null,
+                  skills: [],
+                  experience: "",
+                  summary: `This resume could not be analyzed: ${message}`,
+                  reason: `Analysis failed: ${message}`,
+                  flags: [],
+                  status: "error",
+                });
+              });
+            } finally {
+              completed += batchFiles.length;
+              onProgress(completed, files.length);
+            }
           }
-          analyses.forEach((analysis, index) => {
-            const fileIndex = batchFiles.findIndex((f) => f.name === analysis.filename);
-            const file = batchFiles[fileIndex >= 0 ? fileIndex : index]!;
-            results.push(
-              mapAnalysis(
-                analysis,
-                file.id,
-                prev.find((c) => c.resumeId === file.id)?.id ?? file.id,
-              ),
-            );
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Unknown analysis error";
-          failures.push(message);
-          batchFiles.forEach((file) => {
-            results.push({
-              id: prev.find((c) => c.resumeId === file.id)?.id ?? file.id,
-              resumeId: file.id,
-              name: file.name,
-              role: "",
-              score: null,
-              skills: [],
-              experience: "",
-              summary: `This resume could not be analyzed: ${message}`,
-              reason: `Analysis failed: ${message}`,
-              flags: [],
-              status: "error",
-            });
-          });
-        } finally {
-          onProgress(Math.min(start + batchFiles.length, files.length), files.length);
-        }
-      }
-      if (failures.length === Math.ceil(files.length / UPLOAD_BATCH_SIZE)) {
+        }),
+      );
+
+      results.push(...batchResults.flat());
+      if (failures.length === batches.length) {
         throw new Error(`All resume batches failed. ${failures.join(" ")}`);
       }
     }
