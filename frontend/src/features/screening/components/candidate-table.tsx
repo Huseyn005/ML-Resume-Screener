@@ -165,35 +165,128 @@ export function CandidateTable({ allJobs = false }: { allJobs?: boolean }) {
           Export CSV
         </Button>
       </div>
-      {rows.some((c) => c.demo) && (
-        <p className="text-xs text-muted-foreground">Includes demo data</p>
-      )}
-      <div className="overflow-x-auto rounded-2xl border bg-card">
-        <table className="w-full min-w-[680px] text-left text-sm">
-          <thead className="border-b bg-muted/50 text-xs text-muted-foreground">
-            <tr>
-              <th className="p-4 font-medium">Candidate</th>
-              {allJobs && <th className="p-4 font-medium">Job</th>}
-              <th className="p-4 font-medium">Match score</th>
-              <th className="p-4 font-medium">Top skills</th>
-              <th className="p-4 font-medium">Decision</th>
-              <th className="p-4 font-medium">
-                <span className="sr-only">Details</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((c) => (
-              <Row key={c.id} c={c} allJobs={allJobs} onDetails={() => setDetail(c)} />
-            ))}
-          </tbody>
-        </table>
-        {!shown.length && (
+      {!shown.length ? (
+        <div className="rounded-2xl border bg-card">
           <p className="p-10 text-center text-muted-foreground">No candidates match your search.</p>
-        )}
-      </div>
+        </div>
+      ) : (
+        <>
+          <div className="space-y-3 md:hidden">
+            {shown.map((candidate) => (
+              <MobileRow
+                key={candidate.id}
+                c={candidate}
+                allJobs={allJobs}
+                onDetails={() => setDetail(candidate)}
+              />
+            ))}
+          </div>
+          <div className="hidden max-w-full overflow-x-auto rounded-2xl border bg-card md:block">
+            <table className="w-full min-w-[680px] text-left text-sm">
+              <thead className="border-b bg-muted/50 text-xs text-muted-foreground">
+                <tr>
+                  <th className="p-4 font-medium">Candidate</th>
+                  {allJobs && <th className="p-4 font-medium">Job</th>}
+                  <th className="p-4 font-medium">Match score</th>
+                  <th className="p-4 font-medium">Top skills</th>
+                  <th className="p-4 font-medium">Decision</th>
+                  <th aria-label="Details" className="p-4 font-medium" />
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((c) => (
+                  <Row key={c.id} c={c} allJobs={allJobs} onDetails={() => setDetail(c)} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
       <CandidateDetails candidate={detail} onClose={() => setDetail(null)} />
     </div>
+  );
+}
+function MobileRow({
+  c,
+  allJobs,
+  onDetails,
+}: {
+  c: Candidate & { job: string };
+  allJobs: boolean;
+  onDetails: () => void;
+}) {
+  const { shortlist, toggleShortlist, rejected, reject } = useScreening();
+  const scoreTone =
+    c.score === null
+      ? "text-muted-foreground"
+      : c.score >= 85
+        ? "text-success"
+        : c.score >= 70
+          ? "text-foreground"
+          : "text-destructive";
+
+  return (
+    <article className="space-y-3 rounded-2xl border bg-card p-4 shadow-soft">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-display font-semibold capitalize">{c.name}</p>
+          <p className="text-sm text-muted-foreground">
+            {[c.role, c.experience].filter(Boolean).join(" · ") || "Candidate"}
+          </p>
+          {allJobs && <p className="mt-1 text-xs text-muted-foreground">{c.job}</p>}
+        </div>
+        <p className={cn("shrink-0 font-display text-lg font-bold", scoreTone)}>
+          {c.score === null ? "—" : `${c.score}%`}
+        </p>
+      </div>
+      <CandidateStatus candidate={c} part="badges" />
+      {c.score === null && <CandidateStatus candidate={c} part="message" />}
+      {(c.topSkills ?? c.skills).length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {(c.topSkills ?? c.skills).slice(0, 4).map((skillName) => (
+            <span
+              key={skillName}
+              className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground"
+            >
+              {skillName}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-2">
+        <Button variant="link" className="px-0" onClick={onDetails}>
+          View details
+        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn(
+              "rounded-full",
+              shortlist.includes(c.id) && "border-accent bg-accent text-accent-foreground",
+            )}
+            aria-pressed={shortlist.includes(c.id)}
+            onClick={() => toggleShortlist(c.id)}
+          >
+            <Star className={cn(shortlist.includes(c.id) && "fill-current")} />
+            {shortlist.includes(c.id) ? "Shortlisted" : "Shortlist"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              "rounded-full",
+              rejected.includes(c.id) && "bg-danger-soft text-destructive",
+            )}
+            aria-pressed={rejected.includes(c.id)}
+            onClick={() => reject(c.id)}
+          >
+            <X />
+            {rejected.includes(c.id) ? "Restore" : "Reject"}
+          </Button>
+        </div>
+      </div>
+    </article>
   );
 }
 function Row({

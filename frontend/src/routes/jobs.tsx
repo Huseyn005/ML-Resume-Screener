@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { Copy, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,11 +19,10 @@ export const Route = createFileRoute("/jobs")({
 
 function JobsPage() {
   const { jobs, newJob, openJob, duplicateJob, deleteJob } = useScreening();
-  const navigate = useNavigate();
   return (
     <main className="mx-auto max-w-5xl space-y-6 px-4 py-10">
       <div className="flex items-center justify-between gap-4">
-        <h1 className="font-display text-4xl font-bold">Jobs</h1>
+        <h1 className="font-display text-3xl font-bold sm:text-4xl">Jobs</h1>
         <Button asChild className="rounded-full">
           <Link to="/" onClick={newJob}>
             <Plus />
@@ -32,7 +31,7 @@ function JobsPage() {
         </Button>
       </div>
       {!jobs.length ? (
-        <p className="py-16 text-center text-muted-foreground">
+        <p className="rounded-3xl border bg-card px-6 py-16 text-center text-muted-foreground shadow-soft">
           No saved jobs yet. Use New job to start your first screening.
         </p>
       ) : (
@@ -40,14 +39,14 @@ function JobsPage() {
           {jobs.map((j) => (
             <article
               key={j.id}
-              className="cursor-pointer rounded-2xl border bg-card p-6 shadow-soft transition-transform hover:-translate-y-0.5"
-              onClick={() => {
-                openJob(j.id);
-                void navigate({ to: "/shortlist" });
-              }}
+              className="rounded-2xl border bg-card p-6 shadow-soft transition-transform hover:-translate-y-0.5"
             >
-              <div className="flex justify-between gap-3">
-                <div>
+              <div className="flex items-start justify-between gap-3">
+                <Link
+                  to="/shortlist"
+                  onClick={() => openJob(j.id)}
+                  className="min-w-0 flex-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
                   <h2 className="font-display text-xl font-semibold">{j.title}</h2>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {new Date(j.date).toLocaleDateString("en-GB", {
@@ -57,8 +56,22 @@ function JobsPage() {
                     })}{" "}
                     · {j.employment}
                   </p>
-                </div>
-                <div className="flex" onClick={(e) => e.stopPropagation()}>
+                  <div className="mt-6 flex gap-8 text-sm">
+                    <span>
+                      <strong className="font-display text-xl">{j.candidates.length}</strong>{" "}
+                      <span className="text-muted-foreground">screened</span>
+                    </span>
+                    <span>
+                      <strong className="font-display text-xl">
+                        {j.candidates.some((c) => c.score !== null)
+                          ? `${average(j.candidates)}%`
+                          : "—"}
+                      </strong>{" "}
+                      <span className="text-muted-foreground">average match</span>
+                    </span>
+                  </div>
+                </Link>
+                <div className="flex">
                   <Button
                     variant="ghost"
                     size="icon"
@@ -97,19 +110,6 @@ function JobsPage() {
                   </AlertDialog>
                 </div>
               </div>
-              <div className="mt-6 flex gap-8 text-sm">
-                <span>
-                  <strong className="font-display text-xl">{j.candidates.length}</strong>{" "}
-                  <span className="text-muted-foreground">screened</span>
-                </span>
-                <span>
-                  <strong className="font-display text-xl">
-                    {j.candidates.some((c) => c.score !== null) ? `${average(j.candidates)}%` : "—"}
-                  </strong>{" "}
-                  <span className="text-muted-foreground">average match</span>
-                </span>
-              </div>
-              {j.demo && <p className="mt-4 text-xs text-muted-foreground">Demo data</p>}
             </article>
           ))}
         </div>

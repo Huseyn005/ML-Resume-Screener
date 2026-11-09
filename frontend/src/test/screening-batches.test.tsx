@@ -15,7 +15,7 @@ function wrapper({ children }: { children: ReactNode }) {
 function analysis(filename: string) {
   return {
     filename,
-    candidate_name: filename,
+    candidate_name: filename.replace(/__shortlist_.*(?=\.[^.]+$)/, ""),
     match_percentage: 80,
     top_skills: [],
     missing_skills: [],
@@ -37,6 +37,13 @@ function uploadNames(init: RequestInit | undefined): string[] {
   const body = init?.body;
   if (!(body instanceof FormData)) throw new Error("Expected FormData.");
   return body.getAll("resumes").map((file) => (file as File).name);
+}
+
+function uploadFilename(file: { id: string; name: string }): string {
+  const extensionIndex = file.name.lastIndexOf(".");
+  const stem = extensionIndex >= 0 ? file.name.slice(0, extensionIndex) : file.name;
+  const extension = extensionIndex >= 0 ? file.name.slice(extensionIndex) : "";
+  return `${stem}__shortlist_${file.id}${extension}`;
 }
 
 describe("screening batches", () => {
@@ -74,9 +81,9 @@ describe("screening batches", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls.map(([, init]) => uploadNames(init))).toEqual([
-      files.slice(0, 5).map((file) => file.name),
-      files.slice(5, 10).map((file) => file.name),
-      files.slice(10).map((file) => file.name),
+      files.slice(0, 5).map(uploadFilename),
+      files.slice(5, 10).map(uploadFilename),
+      files.slice(10).map(uploadFilename),
     ]);
     expect(progress).toHaveLength(3);
     expect(progress[progress.length - 1]).toBe(12);
@@ -129,9 +136,57 @@ describe("screening batches", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls.map(([, init]) => uploadNames(init))).toEqual([
-      files.slice(0, 5).map((file) => file.name),
-      files.slice(5, 10).map((file) => file.name),
-      files.slice(10).map((file) => file.name),
+      files.slice(0, 5).map(uploadFilename),
+      files.slice(5, 10).map(uploadFilename),
+      files.slice(10).map(uploadFilename),
+    ]);
+  });
+
+  it("maps duplicate display filenames by upload ID when results have equal names and scores", async () => {
+    vi.stubEnv("VITE_USE_MOCK", "false");
+    vi.stubEnv("VITE_API_URL", "https://screening.example.test");
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const names = uploadNames(init);
+      return new Response(
+        JSON.stringify({
+          results: names
+            .map((name) => ({ ...analysis(name), candidate_name: "Same Candidate" }))
+            .reverse(),
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useScreening(), { wrapper });
+    const files = ["resume-a", "resume-b"].map((id) => ({
+      id,
+      name: "same-name.pdf",
+      size: 10,
+      file: new File(["pdf"], "same-name.pdf", { type: "application/pdf" }),
+    }));
+    act(() => {
+      result.current.setJD("A sufficiently long job description for testing.");
+      result.current.setFiles(files);
+    });
+
+    await act(async () => {
+      await result.current.runScreening(() => undefined);
+    });
+
+    expect(uploadNames(fetchMock.mock.calls[0]?.[1])).toEqual([
+      uploadFilename(files[0]!),
+      uploadFilename(files[1]!),
+    ]);
+    expect(
+      result.current.candidates.map(({ resumeId, id, name, score }) => ({
+        resumeId,
+        id,
+        name,
+        score,
+      })),
+    ).toEqual([
+      { resumeId: "resume-b", id: "resume-b", name: "Same Candidate", score: 80 },
+      { resumeId: "resume-a", id: "resume-a", name: "Same Candidate", score: 80 },
     ]);
   });
 
@@ -207,5 +262,46 @@ describe("screening batches", () => {
     await expect(act(async () => result.current.runScreening(() => undefined))).rejects.toThrow(
       "All resume batches failed",
     );
+  });
+
+  it("preserves existing results when a rerun fails", async () => {
+    vi.stubEnv("VITE_USE_MOCK", "false");
+    vi.stubEnv("VITE_API_URL", "https://screening.example.test");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async (_input, init) => {
+        const names = uploadNames(init);
+        return new Response(JSON.stringify({ results: names.map((name) => analysis(name)) }));
+      })
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: "The backend is unavailable." }), {
+          status: 400,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useScreening(), { wrapper });
+    act(() => {
+      result.current.setJD("A sufficiently long job description for testing.");
+      result.current.setFiles([
+        {
+          id: "resume-1",
+          name: "resume-1.pdf",
+          size: 10,
+          file: new File(["pdf"], "resume-1.pdf", { type: "application/pdf" }),
+        },
+      ]);
+    });
+    await act(async () => {
+      await result.current.runScreening(() => undefined);
+    });
+    const previousCandidates = result.current.candidates;
+
+    act(() => result.current.setJD("A different but sufficiently long job description."));
+    await expect(act(async () => result.current.runScreening(() => undefined))).rejects.toThrow(
+      "All resume batches failed",
+    );
+
+    expect(result.current.candidates).toEqual(previousCandidates);
   });
 });
