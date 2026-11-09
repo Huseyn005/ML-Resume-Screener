@@ -25,7 +25,13 @@ export type Candidate = {
   status?: BackendAnalysisResult["status"];
 };
 
-export type ResumeFile = { id: string; name: string; size: number; file?: File };
+export type ResumeFile = {
+  id: string;
+  name: string;
+  size: number;
+  lastModified?: number;
+  file?: File;
+};
 export type Job = {
   id: string;
   title: string;
@@ -70,6 +76,7 @@ export const formatSize = (b: number) =>
   b < 1024 * 1024
     ? `${Math.max(1, Math.round(b / 1024))} KB`
     : `${(b / 1024 / 1024).toFixed(1)} MB`;
+// eslint-disable-next-line react-refresh/only-export-components -- Shared screening constants accompany the provider API.
 export const EMPLOYMENT = ["Full-time", "Part-time", "Contract", "Internship"] as const;
 
 const DEFAULT_WEIGHTS: Weights = { skills: 60, experience: 30, education: 10 };

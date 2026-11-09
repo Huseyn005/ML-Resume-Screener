@@ -22,6 +22,7 @@ import {
   JOB_DESCRIPTION_MAX_LENGTH,
   JOB_DESCRIPTION_MIN_LENGTH,
 } from "@/features/screening/job-description";
+import { filterDuplicateResumeFiles } from "@/features/screening/resume-files";
 
 export const Route = createFileRoute("/")({
   component: ScreenPage,
@@ -119,12 +120,22 @@ function ScreenPage() {
       (f) => f.name.toLowerCase().endsWith(".pdf") && f.size <= 10 * 1024 * 1024,
     );
     if (ok.length !== list.length) toast.error("Only PDF files up to 10 MB");
-    setFiles((cur) => [
-      ...cur,
-      ...ok
-        .filter((f) => !cur.some((c) => c.name === f.name))
-        .map((f) => ({ id: crypto.randomUUID(), name: f.name, size: f.size, file: f })),
-    ]);
+    const { files: newFiles, duplicateCount } = filterDuplicateResumeFiles(files, ok);
+    if (duplicateCount > 0) {
+      toast.info(`Skipped ${duplicateCount} duplicate file${duplicateCount === 1 ? "" : "s"}`);
+    }
+    if (newFiles.length > 0) {
+      setFiles((cur) => [
+        ...cur,
+        ...newFiles.map((f) => ({
+          id: crypto.randomUUID(),
+          name: f.name,
+          size: f.size,
+          lastModified: f.lastModified,
+          file: f,
+        })),
+      ]);
+    }
   }
 
   async function run() {
