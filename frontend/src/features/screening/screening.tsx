@@ -40,13 +40,16 @@ export type Weights = { skills: number; experience: number; education: number };
 export type Profile = { name: string; email: string };
 
 export type Level = "great" | "good" | "low";
+// eslint-disable-next-line react-refresh/only-export-components -- Shared screening helpers accompany the provider API.
 export const levelOf = (score: number): Level =>
   score >= 85 ? "great" : score >= 70 ? "good" : "low";
+// eslint-disable-next-line react-refresh/only-export-components -- Shared screening constants accompany the provider API.
 export const levelLabel: Record<Level, string> = {
   great: "Great match",
   good: "Good match",
   low: "Weak match",
 };
+// eslint-disable-next-line react-refresh/only-export-components -- Shared screening helpers accompany the provider API.
 export const initials = (name: string) =>
   name
     .split(/\s+/)
@@ -55,12 +58,14 @@ export const initials = (name: string) =>
     .map((n) => n[0])
     .join("")
     .toUpperCase();
+// eslint-disable-next-line react-refresh/only-export-components -- Shared screening helpers accompany the provider API.
 export const average = (cs: Candidate[]) => {
   const scored = cs.filter((c): c is Candidate & { score: number } => c.score !== null);
   return scored.length
     ? Math.round(scored.reduce((sum, c) => sum + c.score, 0) / scored.length)
     : 0;
 };
+// eslint-disable-next-line react-refresh/only-export-components -- Shared screening helpers accompany the provider API.
 export const formatSize = (b: number) =>
   b < 1024 * 1024
     ? `${Math.max(1, Math.round(b / 1024))} KB`
@@ -275,15 +280,20 @@ export function ScreeningProvider({ children }: { children: ReactNode }) {
             try {
               const uploads = await Promise.all(
                 batchFiles.map(async (f) => {
+                  let blob: Blob;
                   if (f.file) {
                     await putResume(f.id, f.file);
-                    return f.file;
+                    blob = f.file;
+                  } else {
+                    const stored = await getResume(f.id);
+                    if (!stored) {
+                      throw new Error(`Resume file "${f.name}" is no longer available.`);
+                    }
+                    blob = stored;
                   }
-                  const blob = await getResume(f.id);
-                  if (!blob) {
-                    throw new Error(`Resume file "${f.name}" is no longer available.`);
-                  }
-                  return new File([blob], f.name, { type: blob.type || "application/pdf" });
+                  return new File([blob], uploadFilename(f), {
+                    type: blob.type || "application/pdf",
+                  });
                 }),
               );
               const payload = await analyzeResumes(jd, uploads);
@@ -293,17 +303,22 @@ export function ScreeningProvider({ children }: { children: ReactNode }) {
                   `The backend returned ${analyses.length} results for ${batchFiles.length} resumes.`,
                 );
               }
-              analyses.forEach((analysis, index) => {
-                const fileIndex = batchFiles.findIndex((f) => f.name === analysis.filename);
-                const file = batchFiles[fileIndex >= 0 ? fileIndex : index]!;
-                batchResults[batchIndex]!.push(
-                  mapAnalysis(
-                    analysis,
-                    file.id,
-                    prev.find((c) => c.resumeId === file.id)?.id ?? file.id,
-                  ),
+              const filesByUploadName = new Map(
+                batchFiles.map((file) => [uploadFilename(file), file]),
+              );
+              const mapped = analyses.map((analysis) => {
+                const file = filesByUploadName.get(analysis.filename);
+                if (!file) {
+                  throw new Error("The backend returned a result for an unknown resume upload.");
+                }
+                return mapAnalysis(
+                  analysis,
+                  file.id,
+                  prev.find((c) => c.resumeId === file.id)?.id ?? file.id,
+                  file.name,
                 );
               });
+              batchResults[batchIndex]!.push(...mapped);
             } catch (error) {
               const message = error instanceof Error ? error.message : "Unknown analysis error";
               failures.push(message);
@@ -332,7 +347,7 @@ export function ScreeningProvider({ children }: { children: ReactNode }) {
 
       results.push(...batchResults.flat());
       if (failures.length === batches.length) {
-        throw new Error(`All resume batches failed. ${failures.join(" ")}`);
+        throw new Error(`All resume batches failed. ${[...new Set(failures)].join(" ")}`);
       }
     }
     results.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
@@ -354,7 +369,16 @@ export function ScreeningProvider({ children }: { children: ReactNode }) {
   async function deleteJob(id: string) {
     const j = jobs.find((j) => j.id === id);
     const used = jobs.filter((x) => x.id !== id).flatMap((x) => x.files.map((f) => f.id));
-    await deleteResumes((j?.files ?? []).map((f) => f.id).filter((f) => !used.includes(f)));
+    try {
+      await deleteResumes((j?.files ?? []).map((f) => f.id).filter((f) => !used.includes(f)));
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? `Could not delete stored resumes: ${error.message}`
+          : "Could not delete stored resumes.",
+      );
+      return;
+    }
     setJobs((p) => p.filter((x) => x.id !== id));
     const ids = j?.candidates.map((c) => c.id) ?? [];
     setShortlist((p) => p.filter((x) => !ids.includes(x)));
@@ -379,7 +403,16 @@ export function ScreeningProvider({ children }: { children: ReactNode }) {
   };
 
   async function clearData() {
-    await clearResumes();
+    try {
+      await clearResumes();
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? `Could not clear stored resumes: ${error.message}`
+          : "Could not clear stored resumes.",
+      );
+      return;
+    }
     setJobs([]);
     setShortlist([]);
     setRejected([]);
@@ -488,11 +521,27 @@ function isBackendAnalysisResult(value: unknown): value is BackendAnalysisResult
   );
 }
 
-function mapAnalysis(result: BackendAnalysisResult, resumeId: string, id: string): Candidate {
+function uploadFilename(file: ResumeFile): string {
+  const extensionIndex = file.name.lastIndexOf(".");
+  const stem = extensionIndex >= 0 ? file.name.slice(0, extensionIndex) : file.name;
+  const extension = extensionIndex >= 0 ? file.name.slice(extensionIndex) : "";
+  return `${stem}__shortlist_${file.id}${extension}`;
+}
+
+function mapAnalysis(
+  result: BackendAnalysisResult,
+  resumeId: string,
+  id: string,
+  filename: string,
+): Candidate {
+  const uploadMarker = `__shortlist_${resumeId}`;
+  const candidateName = result.candidate_name.includes(uploadMarker)
+    ? result.candidate_name.replace(uploadMarker, "").replace(/[\s_-]+$/, "")
+    : result.candidate_name;
   return {
     id,
     resumeId,
-    name: result.candidate_name || result.filename,
+    name: candidateName || filename,
     role: result.role,
     score: result.status === "ok" ? result.match_percentage : null,
     skills: result.skills,
@@ -514,6 +563,7 @@ function mapAnalysis(result: BackendAnalysisResult, resumeId: string, id: string
   };
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- This context hook is exported with the provider.
 export function useScreening() {
   const c = useContext(ScreeningContext);
   if (!c) throw new Error("useScreening must be used inside ScreeningProvider");

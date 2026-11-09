@@ -13,7 +13,7 @@ import {
 import { useScreening } from "@/features/screening/screening";
 
 const NAV = [
-  { to: "/", label: "Screen" },
+  { to: "/", label: "Home" },
   { to: "/shortlist", label: "Shortlist" },
   { to: "/jobs", label: "Jobs" },
   { to: "/candidates", label: "Candidates" },
@@ -52,20 +52,22 @@ export function AppHeader() {
 
   return (
     <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur">
-      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4">
-        <Link to="/" className="flex items-center gap-2 font-display text-xl font-bold">
-          <span className="grid size-9 place-items-center rounded-xl bg-hero text-primary-foreground">
-            <ScanLine className="size-5" />
-          </span>
-          shortlist<span className="text-accent">.</span>
-        </Link>
-        {import.meta.env["VITE_USE_MOCK"] === "true" && (
-          <span className="rounded-full bg-warning-soft px-2.5 py-1 text-xs font-semibold text-foreground">
-            Demo mode
-          </span>
-        )}
-        <nav className="hidden items-center gap-1 md:flex">{links()}</nav>
-        <div className="flex items-center gap-2">
+      <div className="mx-auto grid h-16 max-w-5xl grid-cols-[minmax(0,1fr)_auto] items-center px-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link to="/" className="flex shrink-0 items-center gap-2 font-display text-xl font-bold">
+            <span className="grid size-9 place-items-center rounded-xl bg-hero text-primary-foreground">
+              <ScanLine className="size-5" />
+            </span>
+            shortlist<span className="text-accent">.</span>
+          </Link>
+          {import.meta.env["VITE_USE_MOCK"] === "true" && (
+            <span className="rounded-full bg-warning-soft px-2.5 py-1 text-xs font-semibold text-foreground">
+              Demo mode
+            </span>
+          )}
+        </div>
+        <nav className="hidden items-center gap-1 lg:flex">{links()}</nav>
+        <div className="flex items-center justify-end gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button

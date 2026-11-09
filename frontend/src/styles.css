@@ -4,6 +4,10 @@
 
 @custom-variant dark (&:is(.dark *));
 
+html {
+  scrollbar-gutter: stable;
+}
+
 /*
  * Design system definition.
  *
@@ -152,10 +156,55 @@
     border-color: var(--color-border);
   }
 
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
+
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
   }
+}
+
+.screen-analysis-error[data-sonner-toast] {
+  padding-right: 44px;
+}
+
+.screen-analysis-error[data-sonner-toast] [data-close-button] {
+  top: 50%;
+  right: 10px;
+  left: auto;
+  width: 30px;
+  height: 30px;
+  transform: translateY(-50%);
+}
+
+.screen-analysis-error[data-sonner-toast] [data-close-button] svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-toast[data-sonner-toast] {
+  padding-right: 44px;
+  border-radius: 1rem;
+  border-color: var(--secondary);
+  background-color: var(--secondary);
+  color: var(--secondary-foreground);
+}
+
+.settings-toast[data-sonner-toast] [data-close-button] {
+  top: 50%;
+  right: 10px;
+  left: auto;
+  width: 30px;
+  height: 30px;
+  transform: translateY(-50%);
+}
+
+.settings-toast[data-sonner-toast] [data-close-button] svg {
+  width: 16px;
+  height: 16px;
 }
 
 @utility bg-hero { background-image: var(--gradient-hero); }
