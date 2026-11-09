@@ -17,9 +17,17 @@ async function tx<T>(
 ): Promise<T> {
   const db = await open();
   return new Promise((resolve, reject) => {
-    const r = fn(db.transaction(STORE, mode).objectStore(STORE));
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(r.error);
+    const transaction = db.transaction(STORE, mode);
+    const request = fn(transaction.objectStore(STORE));
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => {
+      db.close();
+      resolve(request.result);
+    };
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error ?? request.error ?? new Error("IndexedDB transaction aborted."));
+    };
   });
 }
 
@@ -28,6 +36,6 @@ export const putResume = (id: string, file: Blob) =>
 export const getResume = (id: string) =>
   tx<Blob | undefined>("readonly", (s) => s.get(id)).catch(() => undefined);
 export const deleteResumes = async (ids: string[]) => {
-  for (const id of ids) await tx("readwrite", (s) => s.delete(id)).catch(() => undefined);
+  for (const id of ids) await tx("readwrite", (s) => s.delete(id));
 };
-export const clearResumes = () => tx("readwrite", (s) => s.clear()).catch(() => undefined);
+export const clearResumes = () => tx("readwrite", (s) => s.clear());

@@ -35,10 +35,10 @@ function SettingsPage() {
   const total = draft.skills + draft.experience + draft.education;
 
   return (
-    <main className="mx-auto max-w-3xl space-y-8 px-4 py-10">
-      <h1 className="font-display text-4xl font-bold">Settings</h1>
+    <main className="mx-auto max-w-5xl space-y-8 px-4 py-10">
+      <h1 className="font-display text-3xl font-bold sm:text-4xl">Settings</h1>
       <form
-        className="space-y-8"
+        className="grid gap-6 lg:grid-cols-2"
         onSubmit={(e) => {
           e.preventDefault();
           if (demoMode && total !== 100) {
@@ -47,10 +47,13 @@ function SettingsPage() {
           }
           setProfile({ name: name.trim(), email: email.trim() });
           if (demoMode) setWeights(draft);
-          toast.success("Settings saved");
+          toast.success("Settings saved", {
+            closeButton: true,
+            className: "settings-toast",
+          });
         }}
       >
-        <section className="space-y-4 border-b pb-8">
+        <section className="flex h-full flex-col gap-4 rounded-3xl border bg-card p-6 shadow-soft">
           <h2 className="font-display text-xl font-semibold">Profile</h2>
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="text-sm">
@@ -75,8 +78,14 @@ function SettingsPage() {
               />
             </label>
           </div>
+          <Button
+            className="mt-auto h-12 w-full self-center rounded-full text-base sm:w-48"
+            disabled={demoMode && total !== 100}
+          >
+            Save changes
+          </Button>
         </section>
-        <section className="space-y-6 border-b pb-8">
+        <section className="flex h-full flex-col gap-5 rounded-3xl border bg-card p-6 shadow-soft">
           <h2 className="font-display text-xl font-semibold">Scoring weights</h2>
           {demoMode ? (
             <>
@@ -99,20 +108,32 @@ function SettingsPage() {
                   />
                 </div>
               ))}
-              <p className="text-sm text-muted-foreground">
+              <p className="max-w-[42ch] text-sm leading-relaxed text-muted-foreground">
                 Total {total}%{total !== 100 ? " · must equal 100%" : ""}. Applies the next time you
                 check resumes.
               </p>
             </>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              Live scores come from the server model. Scoring weights are configured on the server.
-            </p>
+            <>
+              <p className="max-w-[42ch] text-sm leading-relaxed text-muted-foreground">
+                Live scores come from the server model. Scoring weights are configured on the
+                server.
+              </p>
+              <Button
+                type="button"
+                className="mt-auto h-12 w-full self-center rounded-full text-base sm:w-48"
+                onClick={() =>
+                  toast("Custom scoring controls are planned for a future", {
+                    closeButton: true,
+                    className: "settings-toast",
+                  })
+                }
+              >
+                Coming soon
+              </Button>
+            </>
           )}
         </section>
-        <Button className="rounded-full" disabled={demoMode && total !== 100}>
-          Save changes
-        </Button>
       </form>
       <section className="space-y-4 border-t pt-8">
         <h2 className="font-display text-xl font-semibold">Data</h2>
