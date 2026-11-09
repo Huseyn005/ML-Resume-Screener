@@ -11,6 +11,12 @@ buildCommand: npm --prefix frontend run build
 outputDirectory: frontend/dist
 ```
 
+The ignored-build check uses `frontend/ignore-vercel-build.sh`: it skips
+deployments when only files outside `frontend/` and the root `vercel.json`
+change. Frontend changes and Vercel configuration changes continue to build.
+If using the `frontend` Root Directory fallback, `frontend/vercel.json` invokes
+the same script scoped to that directory.
+
 It also rewrites client-side routes to `/index.html`. Configure
 `VITE_API_URL` in the Vercel Preview and Production environments as appropriate;
 Vite embeds this value at build time, so redeploy after changing it.

@@ -1,7 +1,7 @@
 {
   "installCommand": "npm --prefix frontend ci",
   "buildCommand": "npm --prefix frontend run build",
-  "ignoreCommand": "if [ -z \"$VERCEL_GIT_PREVIOUS_SHA\" ] || [ -z \"$VERCEL_GIT_COMMIT_SHA\" ] || [ \"$VERCEL_GIT_PREVIOUS_SHA\" = \"0000000000000000000000000000000000000000\" ]; then exit 1; fi; if git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" \"$VERCEL_GIT_COMMIT_SHA\" -- frontend/ vercel.json; then exit 0; else exit 1; fi",
+  "ignoreCommand": "bash frontend/ignore-vercel-build.sh root",
   "outputDirectory": "frontend/dist",
   "rewrites": [
     {

@@ -1,5 +1,5 @@
 {
-  "ignoreCommand": "if [ -z \"$VERCEL_GIT_PREVIOUS_SHA\" ] || [ -z \"$VERCEL_GIT_COMMIT_SHA\" ] || [ \"$VERCEL_GIT_PREVIOUS_SHA\" = \"0000000000000000000000000000000000000000\" ]; then exit 1; fi; root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1; if git -C \"$root/frontend\" diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" \"$VERCEL_GIT_COMMIT_SHA\" -- .; then exit 0; else exit 1; fi",
+  "ignoreCommand": "bash ignore-vercel-build.sh frontend",
   "rewrites": [
     {
       "source": "/(.*)",
