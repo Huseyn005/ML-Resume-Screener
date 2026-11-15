@@ -38,3 +38,7 @@ big.bin
 .pytest_cache/
 models/
 backend/ml/data/
+backend/ml/artifacts/
+backend/.env
+backend/models/
+frontend/.env.local

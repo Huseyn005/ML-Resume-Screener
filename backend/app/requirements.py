@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.skills import SkillLexicon
+from app.skills import SkillLexicon, extract_lexical
 
 TRIGGER_RE = re.compile(
     r"(?=\b(?:experience\s+with|knowledge\s+of|proficient\s+in|"
@@ -64,3 +64,16 @@ def extract_unlisted_requirements(
             if len(requirements) >= limit:
                 return requirements
     return requirements
+
+
+def filter_known_skill_requirements(
+        phrases: list[str],
+        lexicon: SkillLexicon,
+) -> tuple[list[str], list[str]]:
+    kept = [
+        phrase for phrase in phrases
+        if not extract_lexical(phrase, lexicon)
+    ]
+    kept_set = set(kept)
+    dropped = [phrase for phrase in phrases if phrase not in kept_set]
+    return kept, dropped

@@ -1,5 +1,5 @@
 from functools import lru_cache
-from math import isclose
+from math import isclose, isfinite
 from pathlib import Path
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,8 +38,22 @@ class Settings(BaseSettings):
     education_skill_weight: float = 0.3
     other_skill_weight: float = 0.3
     debug_endpoints: bool = False
+    scoring_mode: str = "legacy"
+    semantic_source: str = "calibrated"
+    scoring_display_map: str = ""
     semantic_low: float = 0.20
     semantic_high: float = 0.75
+    gate_floor: float = 0.5
+    gate_gamma: float = 1.0
+    semantic_skill_credit: float = 0.6
+    unlisted_requirement_share: float = 0.2
+    v2_phrase_cap: int = 1024
+    v2_weight_reliability_skills: float | None = None
+    v2_gate_reliability_skills: float | None = None
+    section_low: float = 0.0
+    section_high: float = 1.0
+    requirement_low: float = 0.0
+    requirement_high: float = 1.0
     skill_cosine_threshold: float = 0.72
     min_hard_skills: int = 4
     chunk_tokens: int = 200
@@ -57,6 +71,87 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_score_weights(self) -> "Settings":
+        if self.v2_weight_reliability_skills is None:
+            object.__setattr__(
+                self,
+                "v2_weight_reliability_skills",
+                float(self.min_hard_skills),
+            )
+        if self.v2_gate_reliability_skills is None:
+            object.__setattr__(
+                self,
+                "v2_gate_reliability_skills",
+                float(self.min_hard_skills),
+            )
+        if self.scoring_mode not in {"legacy", "v2"}:
+            raise ValueError("scoring_mode must be legacy or v2")
+        if self.semantic_source not in {"calibrated", "window"}:
+            raise ValueError(
+                "semantic_source must be calibrated or window"
+            )
+        if self.scoring_display_map.strip():
+            try:
+                pairs = []
+                for item in self.scoring_display_map.split(","):
+                    parts = item.strip().split(":")
+                    if len(parts) != 2:
+                        raise ValueError
+                    x, y = (float(value.strip()) for value in parts)
+                    if not isfinite(x) or not isfinite(y):
+                        raise ValueError
+                    pairs.append((x, y))
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "scoring_display_map must contain finite x:y pairs"
+                ) from None
+            if (
+                len(pairs) < 2
+                or pairs[0][0] != 0.0
+                or pairs[-1][0] != 1.0
+                or any(left[0] >= right[0]
+                       for left, right in zip(pairs, pairs[1:]))
+                or any(
+                    y < 0.0 or y > 100.0
+                    for _, y in pairs
+                )
+                or any(
+                    left[1] > right[1]
+                    for left, right in zip(pairs, pairs[1:])
+                )
+            ):
+                raise ValueError(
+                    "scoring_display_map must start at x=0, end at x=1, "
+                    "have increasing x values, and non-decreasing y values "
+                    "in [0, 100]"
+                )
+        if not 0.0 <= self.gate_floor <= 1.0:
+            raise ValueError("gate_floor must be between 0 and 1")
+        if self.gate_gamma <= 0.0:
+            raise ValueError("gate_gamma must be positive")
+        if not 0.0 <= self.semantic_skill_credit <= 1.0:
+            raise ValueError(
+                "semantic_skill_credit must be between 0 and 1"
+            )
+        if not 0.0 <= self.unlisted_requirement_share <= 0.5:
+            raise ValueError(
+                "unlisted_requirement_share must be between 0 and 0.5"
+            )
+        if self.v2_phrase_cap < 1:
+            raise ValueError("v2_phrase_cap must be at least 1")
+        if self.v2_weight_reliability_skills <= 0.0:
+            raise ValueError(
+                "v2_weight_reliability_skills must be positive"
+            )
+        if self.v2_gate_reliability_skills <= 0.0:
+            raise ValueError(
+                "v2_gate_reliability_skills must be positive"
+            )
+        for name, low, high in (
+            ("section", self.section_low, self.section_high),
+            ("requirement", self.requirement_low, self.requirement_high),
+        ):
+            if low >= high:
+                raise ValueError(f"{name}_low must be less than {name}_high")
         if self.min_hard_skills < 1:
             raise ValueError("min_hard_skills must be at least 1")
         if min(

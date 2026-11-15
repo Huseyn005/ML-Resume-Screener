@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import joblib
+from math import isfinite
 import numpy as np
 from sklearn.isotonic import IsotonicRegression
 from app.config import Settings
@@ -22,6 +23,73 @@ class ScoreParts:
     section_weight: float = 0.0
     limited_skill_signal: bool = False
     hard_skill_penalty: float = 1.0
+    raw_semantic: float = 0.0
+    section_raw: float = 0.0
+    hard_coverage: float = 0.0
+    hard_weight_sum: float = 0.0
+    hard_skill_count: int = 0
+    soft_skill_count: int = 0
+    hard_matched_count: int = 0
+    requirement_score: float = 0.0
+    r_weight: float = 1.0
+    r_gate: float = 1.0
+    v2_final: float = 0.0
+    requirement_weight: float = 0.0
+
+
+@dataclass(frozen=True)
+class ScoreInputs:
+    raw_semantic: float
+    section_raw: float
+    skills_coverage: float
+    hard_coverage: float
+    hard_weight_sum: float
+    hard_skill_count: int
+    soft_skill_count: int
+    hard_matched_count: int
+    requirement_scores: tuple[float, ...] = ()
+
+
+def v2_skill_coverage(
+        jd_weights: dict[str, float],
+        skill_types: dict[str, str],
+        lexical_matches: set[str],
+        semantic_matches: set[str],
+        evidence_weights: dict[str, float],
+        semantic_credit: float,
+) -> tuple[float, float, int]:
+    total = sum(jd_weights.values())
+    hard_total = sum(
+        weight for skill, weight in jd_weights.items()
+        if skill_types.get(skill, "hard") == "hard"
+    )
+    covered = 0.0
+    hard_covered = 0.0
+    hard_matched = 0
+    for skill, weight in jd_weights.items():
+        if skill in lexical_matches:
+            credit = 1.0
+        elif skill in semantic_matches:
+            credit = semantic_credit
+        else:
+            credit = 0.0
+        evidence = evidence_weights.get(skill, 0.0)
+        covered += weight * credit * evidence
+        if skill_types.get(skill, "hard") == "hard":
+            hard_covered += weight * credit * evidence
+            if credit > 0.0:
+                hard_matched += 1
+    return (
+        float(np.clip(
+            covered / total if total > 0.0 else 0.0, 0.0, 1.0
+        )),
+        float(np.clip(
+            hard_covered / hard_total if hard_total > 0.0 else 0.0,
+            0.0,
+            1.0,
+        )),
+        hard_matched,
+    )
 
 
 def topk_mean(resume_emb: np.ndarray, jd_emb: np.ndarray,
@@ -147,6 +215,132 @@ def combine_with_signal(
         calibrator,
         limited_signal,
         penalty,
+    )
+
+
+def apply_display_map(score: float, spec: str) -> int:
+    clamped = float(np.clip(score, 0.0, 1.0))
+    if not spec.strip():
+        return int(round(clamped * 100))
+    pairs = []
+    for item in spec.split(","):
+        parts = item.strip().split(":")
+        if len(parts) != 2:
+            raise ValueError("scoring_display_map must contain x:y pairs")
+        x, y = (float(value.strip()) for value in parts)
+        if not isfinite(x) or not isfinite(y):
+            raise ValueError("scoring_display_map must contain finite pairs")
+        pairs.append((x, y))
+    if clamped <= pairs[0][0]:
+        return int(round(pairs[0][1]))
+    for (left_x, left_y), (right_x, right_y) in zip(
+        pairs, pairs[1:]
+    ):
+        if clamped <= right_x:
+            fraction = (clamped - left_x) / (right_x - left_x)
+            return int(round(left_y + fraction * (right_y - left_y)))
+    return int(round(pairs[-1][1]))
+
+
+def combine_v2(
+        inputs: ScoreInputs,
+        settings: Settings,
+        calibrator: IsotonicRegression | None = None,
+) -> ScoreParts:
+    calibrated = semantic_probability(
+        inputs.raw_semantic, settings, calibrator
+    )
+    semantic = (
+        calibrated
+        if settings.semantic_source == "calibrated"
+        else calibrate(
+            inputs.raw_semantic,
+            settings.semantic_low,
+            settings.semantic_high,
+        )
+    )
+    section = calibrate(
+        inputs.section_raw, settings.section_low, settings.section_high
+    )
+    requirement_values = tuple(
+        calibrate(score, settings.requirement_low, settings.requirement_high)
+        for score in inputs.requirement_scores
+    )
+    requirement = (
+        float(np.mean(requirement_values))
+        if requirement_values else 0.0
+    )
+    n_eff = inputs.hard_weight_sum + 0.5 * inputs.soft_skill_count
+    weight_scale = float(settings.v2_weight_reliability_skills)
+    gate_scale = float(settings.v2_gate_reliability_skills)
+    r_weight = float(np.clip(n_eff / weight_scale, 0.0, 1.0))
+    r_gate = float(np.clip(
+        inputs.hard_weight_sum / gate_scale, 0.0, 1.0
+    ))
+    gate = 1.0 - (
+        (1.0 - settings.gate_floor)
+        * r_gate
+        * (1.0 - inputs.hard_coverage) ** settings.gate_gamma
+    )
+    req_cfg = (
+        settings.skill_weight * settings.unlisted_requirement_share
+        if requirement_values else 0.0
+    )
+    hard_cfg = settings.skill_weight - req_cfg
+    hard_weight = hard_cfg * r_weight
+    freed = hard_cfg - hard_weight
+    active_total = settings.semantic_weight + settings.section_weight
+    active_total += req_cfg
+    if active_total > 0.0:
+        semantic_weight = (
+            settings.semantic_weight
+            + freed * settings.semantic_weight / active_total
+        )
+        section_weight = (
+            settings.section_weight
+            + freed * settings.section_weight / active_total
+        )
+        requirement_weight = req_cfg + freed * req_cfg / active_total
+    else:
+        semantic_weight = 1.0
+        section_weight = 0.0
+        requirement_weight = 0.0
+    base = (
+        semantic_weight * semantic
+        + hard_weight * inputs.skills_coverage
+        + section_weight * section
+        + requirement_weight * requirement
+    )
+    final = float(np.clip(base, 0.0, 1.0) * gate)
+    return ScoreParts(
+        semantic=semantic,
+        calibrated_semantic=calibrated,
+        skill_coverage=inputs.skills_coverage,
+        section_fit=section,
+        final=final,
+        semantic_display=int(round(semantic * 100)),
+        skills_display=int(round(inputs.skills_coverage * 100)),
+        section_display=int(round(section * 100)),
+        match_percentage=apply_display_map(
+            final, settings.scoring_display_map
+        ),
+        semantic_weight=semantic_weight,
+        skill_weight=hard_weight,
+        section_weight=section_weight,
+        limited_skill_signal=r_weight < 1.0,
+        hard_skill_penalty=gate,
+        raw_semantic=inputs.raw_semantic,
+        section_raw=inputs.section_raw,
+        hard_coverage=inputs.hard_coverage,
+        hard_weight_sum=inputs.hard_weight_sum,
+        hard_skill_count=inputs.hard_skill_count,
+        soft_skill_count=inputs.soft_skill_count,
+        hard_matched_count=inputs.hard_matched_count,
+        requirement_score=requirement,
+        r_weight=r_weight,
+        r_gate=r_gate,
+        v2_final=final,
+        requirement_weight=requirement_weight,
     )
 
 
