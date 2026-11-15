@@ -24,6 +24,9 @@ class AnalyzeResult(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
     summary: str = ""
+    ranking_score: float = Field(default=0.0, exclude=True)
+    ranking_hard_coverage: float = Field(default=0.0, exclude=True)
+    ranking_raw_semantic: float = Field(default=0.0, exclude=True)
 
 
 class AnalyzeResponse(BaseModel):

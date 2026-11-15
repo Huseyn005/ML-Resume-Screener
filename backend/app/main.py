@@ -46,11 +46,15 @@ from app.schemas import (
     ScoreBreakdown,
 )
 from app.scoring import (
+    ScoreInputs,
+    calibrate,
     combine_with_signal,
+    combine_v2,
     evidence_weighted_coverage,
     load_calibrator,
     section_fit_score,
     topk_mean,
+    v2_skill_coverage,
 )
 from app.skills import (
     extract_lexical,
@@ -60,7 +64,10 @@ from app.skills import (
     skill_weights,
     technical_skills,
 )
-from app.requirements import extract_unlisted_requirements
+from app.requirements import (
+    extract_unlisted_requirements,
+    filter_known_skill_requirements,
+)
 from app.skill_context import domain_allows, domains_from_skills
 
 log = logging.getLogger("screener")
@@ -73,6 +80,14 @@ JD_MIN, JD_MAX = 50, 10000
 MAX_FILES, MIN_FILES = 30, 1
 RATE_WINDOW_SECONDS = 60
 MAX_TRACKED_CLIENTS = 10_000
+
+
+def ranking_key(result: AnalyzeResult) -> tuple[float, float, float]:
+    return (
+        result.ranking_score,
+        result.ranking_hard_coverage,
+        result.ranking_raw_semantic,
+    )
 
 
 @dataclass
@@ -91,6 +106,8 @@ class ScorePreparation:
     jd_skill_weights: dict[str, float]
     jd_soft_skills: list[str]
     hard_skill_count: int
+    hard_weight_sum: float
+    dropped_requirement_count: int
     batch: list[str]
 
 
@@ -261,11 +278,18 @@ async def analyze(
         raise
     finally:
         semaphore.release()
-    order = sorted(
-        range(len(results)),
-        key=lambda index: results[index].match_percentage,
-        reverse=True,
-    )
+    if settings.scoring_mode == "v2":
+        order = sorted(
+            range(len(results)),
+            key=lambda index: ranking_key(results[index]),
+            reverse=True,
+        )
+    else:
+        order = sorted(
+            range(len(results)),
+            key=lambda index: results[index].match_percentage,
+            reverse=True,
+        )
     results = [results[index] for index in order]
     if debug:
         explanations = [explanations[index] for index in order]
@@ -585,9 +609,27 @@ async def _score_text(
     matched_evidence = {
         skill: skill_evidence.get(skill, 0.0) for skill in matched
     }
-    skills_s = evidence_weighted_coverage(
-        jd_skill_weights, matched_evidence
+    semantic_only = {skill for skill, _score in sem_hits}
+    audit_skills_s, audit_hard_coverage, audit_hard_matched_count = (
+        v2_skill_coverage(
+            jd_skill_weights,
+            lexicon.skill_types,
+            set(lexical),
+            semantic_only,
+            matched_evidence,
+            settings.semantic_skill_credit,
+        )
     )
+    if settings.scoring_mode == "v2":
+        skills_s = audit_skills_s
+        hard_coverage = audit_hard_coverage
+        hard_matched_count = audit_hard_matched_count
+    else:
+        skills_s = evidence_weighted_coverage(
+            jd_skill_weights, matched_evidence
+        )
+        hard_coverage = audit_hard_coverage
+        hard_matched_count = audit_hard_matched_count
     requirement_scores: list[float] = []
     if requirement_emb.size and res_emb.size:
         requirement_sim = requirement_emb @ res_emb.T
@@ -597,30 +639,57 @@ async def _score_text(
         ]
     else:
         requirement_scores = [0.0] * n_req
-    if requirement_scores:
+    legacy_skills_s = skills_s
+    if requirement_scores and settings.scoring_mode == "legacy":
         known_weight = sum(jd_skill_weights.values())
         requirement_weight = 0.5 * len(requirement_scores)
-        skills_s = (
+        legacy_skills_s = (
             skills_s * known_weight
             + 0.5 * sum(requirement_scores)
         ) / (known_weight + requirement_weight)
     jd_vec = mean_pool(jd_emb)
     sec_vec = mean_pool(exp_emb)
     section_s = section_fit_score(jd_vec, sec_vec)
-    hard_matched_count = sum(
-        lexicon.skill_types.get(skill, "hard") == "hard"
-        for skill in matched
+    score_inputs = ScoreInputs(
+        raw_semantic=raw_sem,
+        section_raw=section_s,
+        skills_coverage=skills_s,
+        hard_coverage=hard_coverage,
+        hard_weight_sum=prep.hard_weight_sum,
+        hard_skill_count=hard_skill_count,
+        soft_skill_count=len(jd_soft_skills),
+        hard_matched_count=hard_matched_count,
+        requirement_scores=tuple(requirement_scores),
     )
-    parts = combine_with_signal(
-        raw_sem,
-        skills_s,
-        section_s,
-        settings,
-        hard_skill_count,
-        len(jd_soft_skills),
-        hard_matched_count,
-        getattr(app.state, "calibrator", None),
-    )
+    calibrator = getattr(app.state, "calibrator", None)
+    if settings.scoring_mode == "v2":
+        parts = combine_v2(score_inputs, settings, calibrator)
+        legacy_parts = combine_with_signal(
+            raw_sem,
+            legacy_skills_s,
+            section_s,
+            settings,
+            hard_skill_count,
+            len(jd_soft_skills),
+            hard_matched_count,
+            calibrator,
+        )
+    else:
+        parts = combine_with_signal(
+            raw_sem,
+            legacy_skills_s,
+            section_s,
+            settings,
+            hard_skill_count,
+            len(jd_soft_skills),
+            hard_matched_count,
+            calibrator,
+        )
+        legacy_parts = parts
+        if include_debug:
+            parts_v2 = combine_v2(score_inputs, settings, calibrator)
+        else:
+            parts_v2 = None
     best_section = _best_section(chunks, res_emb, jd_emb)
     top = rank_top_skills(matched, skill_scores, 3)
     miss = pick_missing(missing, 3)
@@ -648,15 +717,22 @@ async def _score_text(
         strengths=strengths,
         gaps=gaps,
         summary=reason,
+        ranking_score=parts.final,
+        ranking_hard_coverage=hard_coverage,
+        ranking_raw_semantic=raw_sem,
     )
     if not include_debug:
         return result
 
     weighted_semantic = parts.semantic_weight * parts.semantic
-    weighted_skills = parts.skill_weight * skills_s
-    weighted_section_fit = parts.section_weight * section_s
+    weighted_skills = parts.skill_weight * parts.skill_coverage
+    weighted_section_fit = parts.section_weight * parts.section_fit
+    weighted_requirements = (
+        parts.requirement_weight * parts.requirement_score
+    )
     pre_clipped = (
         weighted_semantic + weighted_skills + weighted_section_fit
+        + weighted_requirements
     )
     similarities = (
         res_emb @ jd_emb.T
@@ -710,8 +786,12 @@ async def _score_text(
             for index in top_chunk_indices
         ],
         "raw_semantic": raw_sem,
+        "section_raw": section_s,
         "calibrated_semantic": parts.calibrated_semantic,
-        "linear_semantic": parts.semantic,
+        "linear_semantic": calibrate(
+            raw_sem, settings.semantic_low, settings.semantic_high
+        ),
+        "semantic_used": parts.semantic,
         "jd_skill_weights": jd_skill_weights,
         "unlisted_requirements": [
             {
@@ -726,24 +806,90 @@ async def _score_text(
         ],
         "limited_skill_signal": parts.limited_skill_signal,
         "skill_evidence_weights": matched_evidence,
-        "skills_coverage": skills_s,
-        "section_fit": section_s,
+        "skills_coverage": parts.skill_coverage,
+        "section_fit": parts.section_fit,
+        "v2_components": {
+            "semantic": (
+                parts.semantic if settings.scoring_mode == "v2"
+                else parts_v2.semantic
+            ),
+            "skills": (
+                parts.skill_coverage if settings.scoring_mode == "v2"
+                else parts_v2.skill_coverage
+            ),
+            "hard_coverage": (
+                parts.hard_coverage if settings.scoring_mode == "v2"
+                else parts_v2.hard_coverage
+            ),
+            "hard_weight_sum": prep.hard_weight_sum,
+            "soft_skill_count": len(jd_soft_skills),
+            "hard_matched_count": (
+                parts.hard_matched_count
+                if settings.scoring_mode == "v2"
+                else hard_matched_count
+            ),
+            "n_semantic_only_matches": len(sem_hits),
+            "section_fit": (
+                parts.section_fit if settings.scoring_mode == "v2"
+                else parts_v2.section_fit
+            ),
+            "requirements": (
+                parts.requirement_score if settings.scoring_mode == "v2"
+                else parts_v2.requirement_score
+            ),
+            "r_weight": (
+                parts.r_weight if settings.scoring_mode == "v2"
+                else parts_v2.r_weight
+            ),
+            "r_gate": (
+                parts.r_gate if settings.scoring_mode == "v2"
+                else parts_v2.r_gate
+            ),
+            "gate": (
+                parts.hard_skill_penalty
+                if settings.scoring_mode == "v2"
+                else parts_v2.hard_skill_penalty
+            ),
+            "kept_requirement_count": len(requirement_scores),
+            "dropped_requirement_count": (
+                prep.dropped_requirement_count
+            ),
+            "requirement_weight": (
+                parts.requirement_weight
+                if settings.scoring_mode == "v2"
+                else parts_v2.requirement_weight
+            ),
+        },
         "weights": {
             "semantic": parts.semantic_weight,
             "skills": parts.skill_weight,
             "section_fit": parts.section_weight,
+            "requirements": parts.requirement_weight,
         },
         "formula": {
             "weighted_semantic": weighted_semantic,
             "weighted_skills": weighted_skills,
             "weighted_section_fit": weighted_section_fit,
+            "weighted_requirements": weighted_requirements,
             "pre_clipped_score": pre_clipped,
             "final_score": parts.final,
             "hard_skill_penalty": parts.hard_skill_penalty,
             "limited_skill_signal": parts.limited_skill_signal,
             "match_percentage": parts.match_percentage,
+            "legacy_final": legacy_parts.final,
+            "v2_final": (
+                parts.v2_final
+                if settings.scoring_mode == "v2"
+                else parts_v2.v2_final
+            ),
             "expression": (
                 "round(100 * clip("
+                "semantic_weight * semantic + "
+                "skill_weight * skills + "
+                "section_weight * section_fit + "
+                "requirement_weight * requirements, 0, 1) * gate)"
+                if settings.scoring_mode == "v2"
+                else "round(100 * clip("
                 "semantic_weight * linear_semantic + "
                 "skill_weight * skills_coverage + "
                 "section_weight * section_fit, 0, 1) * "
@@ -794,11 +940,20 @@ def _prepare_score(
     jd_all_skills = extract_lexical(jd_clean, lexicon)
     jd_skill_weights = skill_weights(jd_clean, lexicon)
     hard_skill_count = len(jd_skill_weights)
+    hard_weight_sum = sum(
+        weight for skill, weight in jd_skill_weights.items()
+        if lexicon.skill_types.get(skill, "hard") == "hard"
+    )
     jd_soft_skills = [
         skill for skill in jd_all_skills
         if lexicon.skill_types.get(skill) == "soft"
     ]
-    if hard_skill_count < settings.min_hard_skills:
+    fallback_threshold = (
+        hard_weight_sum
+        if settings.scoring_mode == "v2"
+        else hard_skill_count
+    )
+    if fallback_threshold < settings.min_hard_skills:
         for skill in jd_soft_skills:
             jd_skill_weights.setdefault(skill, 0.5)
     jd_skills = list(jd_skill_weights)
@@ -816,9 +971,28 @@ def _prepare_score(
             and domain_allows(skill, jd_domains, lexicon)
         )
     ]
-    unlisted_requirements = extract_unlisted_requirements(jd_clean, lexicon)
+    extracted_requirements = extract_unlisted_requirements(
+        jd_clean, lexicon
+    )
+    if settings.scoring_mode == "v2":
+        unlisted_requirements, dropped_requirements = (
+            filter_known_skill_requirements(
+                extracted_requirements, lexicon
+            )
+        )
+    else:
+        unlisted_requirements = extracted_requirements
+        dropped_requirements = []
+    dropped_requirement_count = (
+        len(dropped_requirements)
+    )
+    phrase_cap = (
+        settings.v2_phrase_cap
+        if settings.scoring_mode == "v2"
+        else 256
+    )
     phrases = [
-        phrase for phrase in noun_phrases(text)
+        phrase for phrase in noun_phrases(text, max_phrases=phrase_cap)
         if extract_lexical(phrase, lexicon)
     ]
     exp_proj = " ".join(
@@ -850,6 +1024,8 @@ def _prepare_score(
         jd_skill_weights=jd_skill_weights,
         jd_soft_skills=jd_soft_skills,
         hard_skill_count=hard_skill_count,
+        hard_weight_sum=hard_weight_sum,
+        dropped_requirement_count=dropped_requirement_count,
         batch=batch,
     )
 

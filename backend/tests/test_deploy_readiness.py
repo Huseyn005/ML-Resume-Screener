@@ -14,6 +14,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 
 from app import main
+import app.config as config
 from app.config import Settings
 from app.extract import extract_pdf
 
@@ -66,7 +67,15 @@ RESUME = (
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+) -> TestClient:
+    monkeypatch.setattr(
+        config,
+        "FINETUNED_DIR",
+        tmp_path / "missing-finetuned",
+    )
     monkeypatch.setattr(main, "load_model", lambda _settings: FakeModel())
     monkeypatch.setattr(main, "get_settings", lambda: Settings())
     with TestClient(main.app) as test_client:

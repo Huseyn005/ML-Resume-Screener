@@ -27,6 +27,7 @@ from app.skills import (
     skill_weights,
     technical_skills,
 )
+from app.scoring import apply_display_map
 
 JOB_DESCRIPTION = (
     "We need a Machine Learning Engineer with Python, PyTorch, NLP "
@@ -393,8 +394,8 @@ def test_debug_explanation_is_opt_in_and_gated(
     assert formula["weighted_semantic"] == pytest.approx(
         detail["weights"]["semantic"] * detail["linear_semantic"]
     )
-    assert formula["match_percentage"] == round(
-        formula["final_score"] * 100
+    assert formula["match_percentage"] == apply_display_map(
+        formula["final_score"], client.app.state.settings.scoring_display_map
     )
 
 
